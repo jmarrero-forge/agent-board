@@ -10,9 +10,14 @@ forge_actions := env("FORGE_ACTIONS", "../actions")
 release-check version:
     bash -euo pipefail -c 'git tag --list "v*" | cargo run --quiet --locked -p agent-board --bin release-check -- "$1"' -- {{quote(version)}}
 
+# Pinned to baseline x86-64, whatever the builder's own defaults: the cc crate
+# compiles ring's and SQLite's C with the builder's gcc, whose default -march
+# or CFLAGS may be newer, and the binary then dies with SIGILL on a CPU
+# without AVX2/BMI2. The target's CFLAGS replace any CFLAGS, and RUSTFLAGS
+# (which the cc crate also reads) any ambient RUSTFLAGS; build.yml checks the result.
 # Shared by PR CI and manual release; musl-tools and the Rust target are prerequisites.
 build-static:
-    cargo build --release --locked --target x86_64-unknown-linux-musl -p agent-board --bin agent-board --bin gh-agent-board
+    CFLAGS_x86_64_unknown_linux_musl='-march=x86-64 -mtune=generic' RUSTFLAGS='-C target-cpu=x86-64' cargo build --release --locked --target x86_64-unknown-linux-musl -p agent-board --bin agent-board --bin gh-agent-board
 
 # Needs just, cargo and docker (or CONTAINER=podman); pulls linter images.
 # Checks .github/, not live/. Remove site/{.venv,dist,pages} first: zizmor

@@ -11,6 +11,13 @@ lists what v1.0 waits on and what a caller may rely on.
 The first release will be v1.0.0, once every gate in docs/release.md is met.
 Since the workspace started at 0.1.0 it has gained:
 
+- The static binaries (`just build-static`, the CI and release build) are
+  pinned to baseline x86-64 for the C that ring and SQLite compile and for
+  Rust, and the build job checks it. They had been built with whatever the
+  builder's gcc produced, which was AVX2/BMI2 code, so they died with
+  "Illegal instruction" on a CPU without those, such as an Ivy Bridge Xeon,
+  on the first live request.
+
 - The pass's new GitHub-only `changeSweepHours` (off at 0, needs `store`
   and `state`) runs the changes diff as stage 0 from watermarks kept in the
   store, and stage 2 then visits only the pull requests it lists, every one

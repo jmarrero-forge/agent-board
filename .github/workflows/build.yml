@@ -32,6 +32,9 @@ jobs:
             "dist/$name-$TARGET" --version
           done
           (cd dist && sha256sum agent-board-* gh-agent-board-*) > dist/SHA256SUMS
+      # The release must run on any x86-64 CPU; see the script for what it reads.
+      - name: Check the binaries need no more than baseline x86-64
+        run: node workflow/check-baseline-cpu.cjs "dist/agent-board-$TARGET" "dist/gh-agent-board-$TARGET"
       # An attested manifest binds the commit and optional tag to both digests.
       - name: Manifest
         env:
