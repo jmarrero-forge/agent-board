@@ -1354,7 +1354,11 @@ bounds the per-repository pull request steps only: activity reads,
 which keeps `Generated-by: https://github.com/cgwalters/#llms`) is the
 attribution the poll's comments and the supervisor executor's writes end
 with, and the one the executor strips from the agent's text before signing
-it once (agent-board#226).
+it once (agent-board#226). The pass reads it from its own configuration file
+(a top-level `generatedBy`, absent by default, with the same checks) and signs
+everything it writes with it, the comments of the pull request poll it runs
+included; the supervisor's and the poll's files each keep their own, so a
+deployment that sets one sets the others to match.
 
 `operatorAnswers` (`true`; absent or `false` by default, which leaves a
 `needs-human` pull request to a person taking the label off) takes the

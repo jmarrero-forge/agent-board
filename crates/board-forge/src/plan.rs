@@ -1512,11 +1512,8 @@ pub fn dispatch_with<C: Transport + Rest, D: Rest>(
 }
 
 /// `plan` after `intro`, as a comment the pass or a planless dispatch posts.
-pub(crate) fn plan_body(intro: &str, plan: &Value) -> String {
-    format!(
-        "{intro}\n\n```{PLAN_FENCE}\n{plan:#}\n```\n\n{}",
-        crate::Footer::default()
-    )
+pub(crate) fn plan_body(intro: &str, plan: &Value, footer: &crate::Footer) -> String {
+    format!("{intro}\n\n```{PLAN_FENCE}\n{plan:#}\n```\n\n{footer}")
 }
 
 /// Posts `plan` on `issue` after `intro`, as the plan writer the token is,
@@ -1526,8 +1523,9 @@ pub(crate) fn post_plan<R: Rest>(
     issue: &ItemRef,
     intro: &str,
     plan: &Value,
+    footer: &crate::Footer,
 ) -> Result<String> {
-    let body = plan_body(intro, plan);
+    let body = plan_body(intro, plan, footer);
     let comments = format!(
         "{API_ROOT}repos/{}/issues/{}/comments",
         issue.repository, issue.number
@@ -1652,7 +1650,14 @@ pub fn dispatch_planless<C: Transport + Rest, D: Rest>(
     if let Some(rule) = collaborators {
         check_inputs(client, issue, issue, &[], rule)?;
     }
-    let id = post_plan(client, issue, PLANLESS_INTRO, &block)?;
+    let id = post_plan(
+        client,
+        issue,
+        PLANLESS_INTRO,
+        &block,
+        // `agent-board dispatch` has no pass configuration to read one from.
+        &crate::Footer::default(),
+    )?;
     let scheduled = Scheduled {
         plan: Some(&id),
         ..Default::default()

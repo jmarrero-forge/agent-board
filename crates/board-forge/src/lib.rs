@@ -45,16 +45,16 @@ pub mod supervise;
 pub mod upstream;
 pub use github::{github_item_url, is_github_login, parse_github_item, validate_github_project};
 
-/// The attribution every bot-posted text ends with, the poll's and the
-/// supervisor executor's alike, unless agent-board.json's `generatedBy`
-/// names another ([`Footer`]).
+/// The attribution every bot-posted text ends with, the poll's, the pass's
+/// and the supervisor executor's alike, unless the configuration's
+/// `generatedBy` names another ([`Footer`]).
 pub const FOOTER: &str = "Generated-by: https://github.com/cgwalters/#llms";
 /// The longest `generatedBy`, in characters.
 pub const FOOTER_LIMIT: usize = 200;
 
-/// The attribution the poll and the supervisor executor append, and the
-/// executor strips from the agent's text before appending it once: both read
-/// it from the same `generatedBy`, defaulting to [`FOOTER`].
+/// The attribution the poll, the pass and the supervisor executor append, and
+/// the executor strips from the agent's text before appending it once: each
+/// reads it from its configuration's `generatedBy`, defaulting to [`FOOTER`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Footer(String);
 
@@ -93,6 +93,18 @@ impl Footer {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// For a configuration struct's `generatedBy`, checked as
+/// [`Footer::from_json`] does; the key's absence is the struct's
+/// `#[serde(default)]`.
+impl<'de> serde::Deserialize<'de> for Footer {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let value = <Value as serde::Deserialize>::deserialize(deserializer)?;
+        Self::from_json(Some(&value)).map_err(serde::de::Error::custom)
     }
 }
 
@@ -238,6 +250,23 @@ mod tests {
         for (value, expected) in cases {
             let got = Footer::from_json(value.as_ref()).ok();
             assert_eq!(got.as_ref().map(Footer::as_str), *expected, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn footer_is_read_from_a_configuration_as_from_json_does() {
+        let long = "x".repeat(FOOTER_LIMIT + 1);
+        for value in [
+            json!("Made by a tool"),
+            json!(long),
+            json!(""),
+            json!(" padded"),
+            json!("two\nlines"),
+            json!(1),
+            Value::Null,
+        ] {
+            let read = serde_json::from_value::<Footer>(value.clone()).ok();
+            assert_eq!(read, Footer::from_json(Some(&value)).ok(), "{value:?}");
         }
     }
 

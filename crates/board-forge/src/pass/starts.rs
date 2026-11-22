@@ -520,7 +520,7 @@ impl<C: Rest + Transport> Scheduler<'_, C> {
         let body = raise.as_ref().map(|(_, text)| {
             format!(
                 "<!-- {ALARM_MARKER}: {kind} -->\n{text}\n\n{}",
-                crate::Footer::default()
+                self.config.generated_by
             )
         });
         let at = |n: u64| format!("{API_ROOT}repos/{repository}/issues/{n}");

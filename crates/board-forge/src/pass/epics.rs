@@ -2509,7 +2509,7 @@ impl<'a, C: Rest + Transport> Scheduler<'a, C> {
         let body = format!(
             "{}\n{text}\n\n{}",
             done_marker(&facts.census),
-            crate::Footer::default()
+            self.config.generated_by
         );
         let comment = |this: &Self| {
             let posted = json!({"body": body});

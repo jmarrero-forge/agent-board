@@ -561,7 +561,7 @@ impl<C: Rest + Transport> Scheduler<'_, C> {
              and lists the rest here for {}, who closes this issue once they are settled.\n\n{links}\n```{LIST_FENCE}\n{list:#}\n```\n\n{}",
             Sweep::opening(self.config),
             self.config.operator,
-            crate::Footer::default()
+            self.config.generated_by
         );
         let url = format!("{API_ROOT}repos/{repository}/issues");
         let (_, filed) = plan::send(
@@ -966,7 +966,7 @@ impl<C: Rest + Transport> Scheduler<'_, C> {
                 left.join("\n")
             ));
         }
-        body.push_str(&format!("\n{}", crate::Footer::default()));
+        body.push_str(&format!("\n{}", self.config.generated_by));
         let issue = &found.issue;
         let at = format!(
             "{API_ROOT}repos/{}/issues/{}",

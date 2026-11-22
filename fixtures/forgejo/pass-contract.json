@@ -166,6 +166,7 @@
     "operator": {"verdict": "native", "forgejo": "a login resolved to its id once a pass, which must be in recorders"},
     "forgejoIntake.state": {"verdict": "native", "forgejo": "off unless set; separate per-instance cursor file, apply only; native issue-comment plans through stage 4"},
     "bot": {"verdict": "native", "forgejo": "the token's GET /user login, its id in recorders"},
+    "generatedBy": {"verdict": "same"},
     "dispatchRepo": {"verdict": "native", "forgejo": "the caller repository on this instance"},
     "dispatchWorkflow": {"verdict": "native", "forgejo": "the caller's Forgejo Actions workflow file"},
     "dispatchRef": {"verdict": "native", "forgejo": "the dispatch ref"},

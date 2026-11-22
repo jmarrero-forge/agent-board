@@ -464,7 +464,7 @@ impl<C: Rest + Transport> Scheduler<'_, C> {
             };
             let body = format!(
                 "{RELEASE_MARKER}\n{explanation}{reason}\n\n{}",
-                crate::Footer::default()
+                self.config.generated_by
             );
             let url = format!(
                 "{API_ROOT}repos/{}/issues/{}/comments",

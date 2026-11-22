@@ -2361,8 +2361,13 @@ pub(super) fn without_epics(mut replay: Replay) -> Replay {
     replay
 }
 
+/// The `generatedBy` of [`config`], unless its `edit` sets another: not the
+/// default, so that a text signed with [`crate::FOOTER`] shows.
+pub(super) const TEST_FOOTER: &str = "Generated-by: https://example.org/pass-tests";
+
 pub(super) fn config(edit: Value) -> Config {
     let mut value: Value = serde_json::from_str(CONFIG).unwrap();
+    value["generatedBy"] = json!(TEST_FOOTER);
     value
         .as_object_mut()
         .unwrap()
@@ -2371,6 +2376,22 @@ pub(super) fn config(edit: Value) -> Config {
     // deliberately reads the order in the caller's text, not Value iteration.
     value.sort_all_objects();
     Config::parse(&value.to_string()).unwrap()
+}
+
+/// The pass signs with its configuration's `generatedBy` alone: of the
+/// `writes` it made, none of those with an attribution carries any other,
+/// the default one included.
+pub(super) fn assert_signed<'a>(config: &Config, writes: impl IntoIterator<Item = &'a Value>) {
+    let footer = config.generated_by.as_str();
+    for body in writes {
+        let body = body.to_string();
+        if body.contains("Generated-by:") {
+            assert!(body.contains(footer), "not signed with {footer:?}: {body}");
+            if footer != crate::FOOTER {
+                assert!(!body.contains(crate::FOOTER), "default footer: {body}");
+            }
+        }
+    }
 }
 
 /// `config` with tracker out of the harness, by `pr.noMerge`, so that its
@@ -6403,7 +6424,7 @@ fn apply(forge: &Forge, config: &Config) -> Report {
 
 /// [`apply`] within `limits`.
 pub(super) fn apply_limited(forge: &Forge, config: &Config, limits: Limits) -> Report {
-    block(run(
+    let report = block(run(
         forge,
         forge,
         config,
@@ -6411,7 +6432,9 @@ pub(super) fn apply_limited(forge: &Forge, config: &Config, limits: Limits) -> R
         (Mode::Actions(&own()), limits),
         forge.replay.now,
     ))
-    .unwrap()
+    .unwrap();
+    assert_signed(config, forge.writes.borrow().iter().map(|(.., body)| body));
+    report
 }
 
 /// [`apply`] within a budget of `limit` requests.
@@ -6419,14 +6442,16 @@ pub(super) fn apply_within(forge: &Forge, config: &Config, limit: usize) -> Repo
     let admit_by = Instant::now() + Duration::from_secs(PASS_SECONDS_LIMIT);
     let state = (State::default(), Mode::Actions(&own()), Limits::default());
     let within = (state.0, state.1, state.2, forge.replay.now);
-    block(run_within(
+    let report = block(run_within(
         forge,
         forge,
         config,
         within,
         &Bounds::new(limit, admit_by),
     ))
-    .unwrap()
+    .unwrap();
+    assert_signed(config, forge.writes.borrow().iter().map(|(.., body)| body));
+    report
 }
 
 /// Replay the pass against the atomic ref forge, with a foreign workflow
@@ -12158,6 +12183,7 @@ fn harness_work_is_planned_rather_than_held() {
                         !body.contains("credentials, budget, rulesets"),
                         "{name}: {body}"
                     );
+                    assert!(body.ends_with(TEST_FOOTER), "{name}: {body}");
                     return Some(format!("{method} release"));
                 }
                 if method == "PATCH" && path.is_empty() {
@@ -13033,6 +13059,9 @@ fn verdict_writes(forge: &Forge, issue: &str) -> Vec<(String, Value)> {
     (forge.writes.borrow().iter())
         .filter(|(_, url, body)| {
             let said = text(body, "/body");
+            if said.starts_with("The board pass closed") {
+                assert!(said.ends_with(TEST_FOOTER), "{said}");
+            }
             let acted = url.ends_with("/labels")
                 || url.ends_with("/assignees")
                 || url == issue
@@ -13582,6 +13611,14 @@ fn apply_replans_an_open_issue_after_its_run() {
             .iter()
             .filter(|c| c.starts_with("<!-- agent-board-merged"));
         assert!(markers.count() <= 1, "{name}: {comments:#?}");
+        let closing = |c: &&String| c.starts_with("<!-- agent-board-merged");
+        assert!(
+            comments
+                .iter()
+                .filter(closing)
+                .all(|c| c.ends_with(TEST_FOOTER)),
+            "{name}: {comments:#?}"
+        );
         let issue = format!("{API_ROOT}repos/{repo}/issues/{number}");
         let writes = forge.writes.borrow();
         let closed = writes.iter().filter(|(m, url, body)| {
@@ -14576,6 +14613,9 @@ fn apply_stops_starting_while_runs_never_start() {
                 .as_str()
                 .map_or(body.to_string(), str::to_owned);
             assert!(shown.contains(has), "{name}: {body:#}");
+            if has.starts_with("<!--") {
+                assert!(shown.ends_with(TEST_FOOTER), "{name}: {body:#}");
+            }
         }
         if let Some(("POST", _)) = writes.first() {
             assert_eq!(written[0].1["labels"], json!(["needs-human"]), "{name}");
@@ -19472,6 +19512,11 @@ fn body_plans_start_a_p0_or_p1_issue() {
             "{name}"
         );
         assert!(
+            comments[0].ends_with(TEST_FOOTER),
+            "{name}: {}",
+            comments[0]
+        );
+        assert!(
             comments[1].starts_with("<!-- agent-board-dispatch: "),
             "{name}"
         );
@@ -19922,6 +19967,50 @@ fn promote(edit: Value) -> Value {
     keys.extend(edit.as_object().unwrap().clone());
     keys.retain(|_, value| *value != json!("-"));
     json!({ "promote": section })
+}
+
+/// `generatedBy` is the attribution the pass and the poll it runs sign with,
+/// read as the poll's and the supervisor's is: one trimmed line of 1 to
+/// [`crate::FOOTER_LIMIT`] characters, and the default where absent.
+#[test]
+fn generated_by_is_the_one_attribution_of_the_pass() {
+    let long = "x".repeat(crate::FOOTER_LIMIT + 1);
+    let cases: Vec<(&str, Option<Value>, Option<&str>)> = vec![
+        ("absent", None, Some(crate::FOOTER)),
+        (
+            "custom",
+            Some(json!("Made by a tool")),
+            Some("Made by a tool"),
+        ),
+        ("null", Some(Value::Null), None),
+        ("empty", Some(json!("")), None),
+        ("padded", Some(json!(" padded")), None),
+        ("two lines", Some(json!("two\nlines")), None),
+        ("too long", Some(json!(long)), None),
+        ("not text", Some(json!(1)), None),
+    ];
+    for (name, value, expected) in cases {
+        let mut settings: Value = serde_json::from_str(CONFIG).unwrap();
+        assert!(
+            settings.get("generatedBy").is_none(),
+            "the fixture is the default"
+        );
+        if let Some(value) = value {
+            settings["generatedBy"] = value;
+        }
+        match (Config::parse(&settings.to_string()), expected) {
+            (Ok(config), Some(footer)) => {
+                assert_eq!(config.generated_by.as_str(), footer, "{name}");
+                // The pull request poll signs with it too.
+                assert_eq!(config.poll(None).policy.footer.as_str(), footer, "{name}");
+            }
+            (Err(error), None) => {
+                let error = format!("{error:#}");
+                assert!(error.contains("generatedBy"), "{name}: {error}");
+            }
+            (got, _) => panic!("{name}: {got:?}"),
+        }
+    }
 }
 
 /// One `pr` block gives the same policy read by the pass or, at the top
@@ -25663,7 +25752,11 @@ fn apply_edits_an_epics_planning_request_in_place() {
             .unwrap();
         let old = json!({"schema": JOB_PLAN_SCHEMA, "repo": "cgwalters-forge/tracker", "item": 596,
             "kind": "triage", "runner": TRIAGE_RUNNER, "brief": "Plan the epic."});
-        let body = plan_body("The board pass asks a triage run to plan this epic.", &old);
+        let body = plan_body(
+            "The board pass asks a triage run to plan this epic.",
+            &old,
+            &crate::Footer::default(),
+        );
         let id = 8_000_000_001_u64;
         let url =
             format!("https://github.com/cgwalters-forge/tracker/issues/596#issuecomment-{id}");
@@ -25898,6 +25991,7 @@ fn sweep_files_runs_and_applies_once_a_week() {
     );
     let body = text(&posted[0], "/body");
     assert!(body.starts_with(sweep::SWEEP_MARKER), "{body}");
+    assert!(body.ends_with(TEST_FOOTER), "{body}");
     assert!(
         body.contains("\"cgwalters-forge/tracker#459\",\n    \"cgwalters-forge/tracker#533\""),
         "{body}"

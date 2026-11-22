@@ -1,8 +1,8 @@
 use super::*;
 use crate::epic::{EPIC_PLAN_SCHEMA, SUB_ISSUES_QUERY};
 use crate::pass::tests::{
-    answer, block, config, preview, preview_within, replay as board, set_usage, subs_mut,
-    subs_request, unfinished, usage,
+    TEST_FOOTER, answer, assert_signed, block, config, preview, preview_within, replay as board,
+    set_usage, subs_mut, subs_request, unfinished, usage,
 };
 use std::cell::{Cell, RefCell};
 
@@ -1768,7 +1768,7 @@ fn local_with(forge: &Forge, writes: usize, settings: Value) -> Report {
     };
     let config = config(settings);
     let mode = (Mode::Local, limits);
-    block(run(
+    let report = block(run(
         forge,
         forge,
         &config,
@@ -1776,7 +1776,9 @@ fn local_with(forge: &Forge, writes: usize, settings: Value) -> Report {
         mode,
         forge.replay.now,
     ))
-    .unwrap()
+    .unwrap();
+    assert_signed(&config, forge.writes.borrow().iter().map(|(_, body)| body));
+    report
 }
 
 /// An applying pass applies tracker#890's plan, had it no receipt, once:
@@ -2777,6 +2779,7 @@ fn done_epic_is_asked_or_closed_once() {
         for (what, body) in &made {
             if what.ends_with("/comments") {
                 assert!(text(body, "/body").starts_with(&marker), "{body}");
+                assert!(text(body, "/body").ends_with(TEST_FOOTER), "{body}");
             }
             if what.starts_with("PATCH") {
                 assert_eq!(

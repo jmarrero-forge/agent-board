@@ -453,7 +453,7 @@ impl<C: ForgejoTransport> Schedule<'_, C> {
             shared::SWEEP_MARKER,
             shared::Sweep::opening(self.config),
             self.config.operator,
-            crate::Footer::default()
+            self.config.generated_by
         );
         let forge = self.epic_forge();
         let number = forge

@@ -113,7 +113,7 @@ impl<C: ForgejoTransport> Schedule<'_, C> {
             &mut state.repositories,
             None,
             &self.now.replace_nanosecond(0)?.format(&Rfc3339)?,
-            &crate::Footer::default(),
+            &self.config.generated_by,
         )?;
         for report in reports {
             if let Some(error) = report.error {

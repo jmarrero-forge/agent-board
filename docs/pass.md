@@ -6235,6 +6235,7 @@ remain open; this inventory is not an implementation claim for proposed behavior
 | Key | Meaning; default |
 | --- | --- |
 | `operator`, `bot` | Direction/plan writer and applying bot logins; required |
+| `generatedBy` | The attribution every comment and issue the pass writes ends with, its pull request poll's included, and the trailer the Forgejo intake reports as generated: one trimmed line of at most 200 characters, as in [the poll's](poll.md); `Generated-by: https://github.com/cgwalters/#llms` |
 | `dispatchRepo`, `dispatchWorkflow`, `dispatchRef` | Caller repository/workflow/ref; required, required, caller default branch |
 | `follow` | Exact repositories for existing PR follow-up; `[]` |
 | `midstream.owner`, `midstream.topic` | The organization, `dispatchRepo`'s owner, whose repositories with the GitHub topic stage 2 follows and never merges in, as if in `follow` and `pr.noMerge`, read with one listing of at most 5 pages a pass; absent is off with no reads |
