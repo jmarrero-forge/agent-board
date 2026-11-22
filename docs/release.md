@@ -226,7 +226,11 @@ and `cargo test --locked -p agent-board --test release` run the two release chec
 
 One release runs at a time. Read-only jobs validate and build the dispatched
 commit with `just build-static` for `x86_64-unknown-linux-musl`, using no build
-cache. A separate job attests `release.json` and verifies its bundle against the
+cache. The recipe pins the C that ring and SQLite compile, and the Rust, to
+baseline x86-64, so the binaries run on CPUs without AVX2, and the build job
+fails if `workflow/check-baseline-cpu.cjs` finds newer instructions in the
+plain C it reads (the script says what that covers). A separate job attests
+`release.json` and verifies its bundle against the
 workflow on main and the dispatched commit without a token. Only the publish
 job has `contents: write`; it executes no project code. It rechecks the tag
 inventory, creates `vVERSION` explicitly at the dispatched SHA (never reuses an
