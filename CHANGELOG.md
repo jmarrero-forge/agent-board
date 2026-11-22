@@ -18,6 +18,12 @@ Since the workspace started at 0.1.0 it has gained:
   "Illegal instruction" on a CPU without those, such as an Ivy Bridge Xeon,
   on the first live request.
 
+- The pass takes the optional top-level `generatedBy` of the poll and the
+  supervisor (one trimmed line of at most 200 characters; absent keeps
+  `Generated-by: https://github.com/cgwalters/#llms`) and signs every comment
+  and issue it writes with it, its pull request poll's included, where it
+  signed with the default whatever the file said.
+
 - The pass's new GitHub-only `changeSweepHours` (off at 0, needs `store`
   and `state`) runs the changes diff as stage 0 from watermarks kept in the
   store, and stage 2 then visits only the pull requests it lists, every one

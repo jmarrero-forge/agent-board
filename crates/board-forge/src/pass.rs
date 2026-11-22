@@ -854,6 +854,11 @@ pub struct Config {
     pub max_dispatch: Option<usize>,
     pub max_writes: Option<usize>,
     pub max_status_changes: Option<usize>,
+    /// The attribution every comment and issue the pass writes ends with,
+    /// the poll's included, as one trimmed line of 1 to
+    /// [`crate::FOOTER_LIMIT`] characters; absent keeps [`crate::FOOTER`].
+    #[serde(default)]
+    pub generated_by: crate::Footer,
     /// Loaded by the CLI from trusted bounds files: the poll's [`PollPolicy::fix_bounds`].
     #[serde(skip)]
     pub fix_bounds: poll::bounds::FixBoundsSet,
@@ -2207,6 +2212,7 @@ impl Config {
             rebase_rounds: self.pr.rebase_rounds,
             pace: self.poll_pace(snapshot),
             fix_bounds: self.fix_bounds.clone(),
+            footer: self.generated_by.clone(),
             preview_fix_pools: self.pool_headroom.then(|| self.pr.fix_pools.clone()),
             pass_triage_pools: self.pool_headroom.then(|| self.triage_pools().to_vec()),
             fix_plans: self.fix_plans,
@@ -9666,7 +9672,7 @@ impl<'a, C: Rest + Transport> Scheduler<'a, C> {
                 issue.repository, issue.number
             );
             let post = |body: String| {
-                let body = format!("{body}\n\n{}", crate::Footer::default());
+                let body = format!("{body}\n\n{}", self.config.generated_by);
                 let url = format!("{issue_url}/comments");
                 plan::send(&self.client, "POST", &url, &json!({"body": body}), 0)
             };
@@ -10235,8 +10241,7 @@ impl<'a, C: Rest + Transport> Scheduler<'a, C> {
                 let body = format!(
                     "{marker}\nThe board pass closed this issue as completed: its dispatched pull request {} \
                      merged and closes it, but the issue stayed open. Reopen it if that is wrong.\n\n{}",
-                    pull.url,
-                    crate::Footer::default()
+                    pull.url, self.config.generated_by
                 );
                 let url = format!("{issue_url}/comments");
                 plan::send(&self.client, "POST", &url, &json!({"body": body}), 0)?;
@@ -10517,14 +10522,14 @@ impl<'a, C: Rest + Transport> Scheduler<'a, C> {
     /// `intro`, as [`Self::post_plan`] would post it.
     fn edit_plan(&self, issue: &ItemRef, id: u64, intro: &str, plan: &Value) -> Result<()> {
         let url = format!("{API_ROOT}repos/{}/issues/comments/{id}", issue.repository);
-        let body = plan_body(intro, plan);
+        let body = plan_body(intro, plan, &self.config.generated_by);
         plan::send(&self.client, "PATCH", &url, &json!({"body": body}), 0).map(drop)
     }
 
     /// Posts `plan` on `issue` after `intro`, as the plan writer the pass's
     /// token is, and returns the posted plan's id ([`plan::plan_id`]).
     fn post_plan(&self, issue: &ItemRef, intro: &str, plan: &Value) -> Result<String> {
-        plan::post_plan(&self.client, issue, intro, plan)
+        plan::post_plan(&self.client, issue, intro, plan, &self.config.generated_by)
     }
 
     /// With [`Config::body_plans`], the plan an issue with no plan comment

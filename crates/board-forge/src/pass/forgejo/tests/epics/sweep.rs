@@ -7,12 +7,16 @@ use crate::pass::sweep::{SWEEP_MARKER, VERDICTS_FENCE};
 /// Another work repository, whose issues may be private.
 const OTHER: &str = "example/other";
 
+/// The attribution the sweep configuration signs with.
+const SIGNATURE: &str = "Generated-by: https://example.org/forgejo-sweep-tests";
+
 /// The epics' configuration with triage scope `epics` and a sweep due from
 /// Friday 09:00, before the pass's clock (Friday 15:15).
 fn sweep_config(wip: u64) -> Config {
     let mut value = file();
     value["board"]["url"] = URL.into();
     value["board"]["repositories"] = json!([WORK, OTHER]);
+    value["generatedBy"] = SIGNATURE.into();
     value["wip"] = wip.into();
     value["workRepositories"] = json!([WORK, OTHER]);
     value["pools"] = json!({"claude": {}});
@@ -130,6 +134,10 @@ fn due_files_once_a_week_with_its_list_record() {
         .unwrap();
     let n = *n;
     assert_eq!(filed["title"], "Weekly sweep: 2 issues outside the epics");
+    assert!(
+        filed["body"].as_str().unwrap().ends_with(SIGNATURE),
+        "{filed}"
+    );
     // Nothing is listed in the body as a record; the comment is.
     assert!(
         !filed["body"]
