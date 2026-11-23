@@ -6608,7 +6608,8 @@ impl<'a, C: Rest + Transport> Scheduler<'a, C> {
         // A run in flight on a pool will give its provider a reading: no
         // probe goes alongside it, on that pool or another on the provider.
         // One that names no pool may be on any; once it has asked, the
-        // broker's count says so, and the next pass probes none.
+        // broker's count or its fresh reading says so, and the next pass
+        // probes none.
         let flying: BTreeSet<&String> = pools.iter().filter_map(|p| self.probes.get(p)).collect();
         let probes = (self.probes.iter())
             .filter(|(_, on)| !flying.contains(on))

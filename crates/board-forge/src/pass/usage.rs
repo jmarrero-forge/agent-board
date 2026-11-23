@@ -12,6 +12,10 @@ const BROKER_SCHEMA: &str = "praxis-broker-usage/v1";
 const SOURCE: &str = "praxis";
 /// The hold reason of a pool the broker has no current reading for.
 pub(super) const NO_READING: &str = "no-reading";
+/// When the paced window of a [`NO_READING`] pool's last reading reset,
+/// where that reading was otherwise current and no shorter window was used
+/// up: no held pool's run will read it again, so [`unasked`] probes it.
+const WINDOW_RESET_AT: &str = "window_reset_at";
 /// Only a window this long is paced evenly; a shorter one (five hours) is
 /// spent in bursts and holds work only once used up.
 const MIN_PACED_MINUTES: f64 = 24.0 * 60.0;
@@ -192,7 +196,9 @@ fn unread(at: &str) -> Value {
 /// against [`allowed`], plus `burst` points but never past the target, and a
 /// shorter window used up holds until a fresh reading, even after reset.
 /// Only `pace-only` certifies that no window is exhausted. Its `observed_at` is that
-/// window's own, so a recent short-window reading does not freshen it.
+/// window's own, so a recent short-window reading does not freshen it. A
+/// reading of that window that has reset since is none too, marked
+/// [`WINDOW_RESET_AT`] unless a shorter window was used up.
 fn pace(
     windows: &[Window],
     settings: &PoolSettings,
@@ -210,10 +216,25 @@ fn pace(
     // An old or future reading is none: PR pacing trusts `hold` as it is.
     let age = seconds(now) - paced.observed;
     if paced.minutes < MIN_PACED_MINUTES
-        || resets <= now
         || !(-(CLOCK_SKEW_SECONDS as f64)..=OBSERVED_STALE_SECONDS as f64).contains(&age)
     {
         return Ok(unread(at));
+    }
+    // The shorter windows used up, each of which holds until a fresh reading.
+    let spent: Vec<&Window> = (windows.iter().enumerate())
+        .filter(|(i, w)| *i != index && w.used >= 100.0)
+        .map(|(_, w)| w)
+        .collect();
+    // A reading of a window that has reset since is none too: its use is
+    // gone, and the broker reads the new window only from a request, which a
+    // held pool makes none of. A used-up shorter window still waits for a
+    // fresh one.
+    if resets <= now {
+        let mut entry = unread(at);
+        if spent.is_empty() {
+            entry[WINDOW_RESET_AT] = resets.format(&Rfc3339)?.into();
+        }
+        return Ok(entry);
     }
     let (goal, burst) = (settings.target * 100.0, settings.burst);
     let allowed = allowed(settings.target, paced.minutes, resets, now);
@@ -233,11 +254,7 @@ fn pace(
             false => paced.resets - window + (paced.used - burst) / goal * window,
         });
     }
-    for (_, spent) in windows
-        .iter()
-        .enumerate()
-        .filter(|(i, w)| *i != index && w.used >= 100.0)
-    {
+    for spent in spent {
         // A cap must remain authoritative even when this pool is also over pace.
         reason = Some("window");
         next = Some(next.map_or(spent.resets, |n: f64| n.max(spent.resets)));
@@ -449,10 +466,12 @@ const PROVIDERS: &[(&str, &str)] = &[("claude", "anthropic"), ("openai", "codex"
 
 /// The pools of `snapshot` without a reading that the broker has sent no
 /// request for since it started: it learns a pool's windows only from its
-/// responses, so after a restart no reading arrives until a run asks. A pool
-/// with requests and still no reading is stale, and stays held; so is one
-/// whose count the broker does not give. Each with its provider, which
-/// pools on one grant pool share: one run on any of them reads them all.
+/// responses, so after a restart no reading arrives until a run asks. So
+/// does a pool whose last reading's window has reset since
+/// ([`WINDOW_RESET_AT`]), whatever the count. A pool with requests and still
+/// no reading is stale, and stays held; so is one whose count the broker
+/// does not give. Each with its provider, which pools on one grant pool
+/// share: one run on any of them reads them all.
 pub(super) fn unasked(broker: &Value, snapshot: &Value) -> BTreeMap<String, String> {
     let asked = |provider: &str| {
         let counts = &broker[provider]["counts"];
@@ -467,7 +486,8 @@ pub(super) fn unasked(broker: &Value, snapshot: &Value) -> BTreeMap<String, Stri
                 Some(on) => Some(on),
                 None => PROVIDERS.iter().find(|(p, _)| p == pool).map(|(_, on)| *on),
             };
-            let provider = provider.filter(|on| asked(on) == Some(0))?;
+            let reset = entry[WINDOW_RESET_AT].is_string();
+            let provider = provider.filter(|on| reset || asked(on) == Some(0))?;
             Some((pool.clone(), provider.to_owned()))
         })
         .collect()
@@ -475,7 +495,10 @@ pub(super) fn unasked(broker: &Value, snapshot: &Value) -> BTreeMap<String, Stri
 
 fn describe(name: &str, entry: &Value) -> String {
     if entry["reason"] == NO_READING {
-        return format!("{name}: no reading (held)");
+        return match entry[WINDOW_RESET_AT].as_str() {
+            Some(reset) => format!("{name}: no reading since its window reset at {reset} (held)"),
+            None => format!("{name}: no reading (held)"),
+        };
     }
     let percent = |key: &str| entry[key].as_f64().unwrap_or(f64::NAN).round();
     if entry["source"] == GRANT_SOURCE {
@@ -1314,6 +1337,27 @@ pub(super) mod tests {
             (&json!(true), &json!(NO_GRANT))
         );
         assert_eq!(openai["grant_pool"], "codex");
+        // A reading of a week that has reset since, which alone would be
+        // probed, is the grant's to pace: its mark goes with the broker's
+        // entry, and a broker that has asked probes nothing, fresh grant or stale.
+        let mut reset = broker();
+        reset["anthropic"]["unified_7d"]["reset"] = json!(1792768000);
+        for provider in ["anthropic", "codex"] {
+            reset[provider]["counts"] = json!({"requests": 3, "unmetered": 0});
+        }
+        let mut stale = grant();
+        stale["observed_at"] = json!(1792768000 - 6 * 3600);
+        for grant in [grant(), stale] {
+            let mut snap = snapshot(&reset, &pools(), now()).unwrap();
+            assert!(snap["pools"]["claude"][WINDOW_RESET_AT].is_string());
+            assert_eq!(unasked(&reset, &snap).len(), 1);
+            grants(&mut snap, Some(&grant), &budget, now()).unwrap();
+            decided("a reset week under a grant", &snap);
+            for (pool, entry) in snap["pools"].as_object().unwrap() {
+                assert!(entry.get(WINDOW_RESET_AT).is_none(), "{pool}: {entry}");
+            }
+            assert_eq!(unasked(&reset, &snap), BTreeMap::new(), "{grant}");
+        }
     }
 
     /// Every entry, paced, unread or granted, carries the pass's decision:
@@ -1349,13 +1393,23 @@ pub(super) mod tests {
         serde_json::from_value(pools).unwrap()
     }
 
-    /// Each pool's hold, reason and next dispatch from the broker's answer with `edits` (JSON pointer, value).
-    /// The expected values are what tracker's usage.cjs computes from the
-    /// same answers.
+    /// Each pool's hold, reason and next dispatch from the broker's answer with `edits` (JSON pointer, value),
+    /// and the pools [`unasked`] probes, whether the broker counts no requests
+    /// or some: only a current reading of a paced window that has reset since,
+    /// whatever the count, unless a shorter window was used up. Before
+    /// agent-board took the reset as a probe (jmarrero-forge/tracker#107),
+    /// such a pool held until the broker restarted. The holds expected are
+    /// what tracker's usage.cjs computes from the same answers.
     #[test]
     fn pace_from_recorded_answers() {
         type Pool = Option<(bool, Option<&'static str>, Option<&'static str>)>;
-        type Case = (&'static str, Vec<(&'static str, Value)>, Pool, Pool);
+        type Case = (
+            &'static str,
+            Vec<(&'static str, Value)>,
+            Pool,
+            Pool,
+            &'static [&'static str],
+        );
         let free: Pool = Some((false, None, None));
         let unread: Pool = Some((true, Some(NO_READING), None));
         let codex_spent = |reset_after: u64| {
@@ -1372,8 +1426,9 @@ pub(super) mod tests {
                 ),
             ]
         };
+        let week = || ("/anthropic/unified_7d/reset", json!(1792768000));
         let cases: Vec<Case> = vec![
-            ("as recorded", vec![], free, free),
+            ("as recorded", vec![], free, free, &[]),
             (
                 "openai over pace and burst",
                 vec![("/codex/primary/used_percent", json!(10))],
@@ -1383,24 +1438,28 @@ pub(super) mod tests {
                     Some(PACE_ONLY_REASON),
                     Some("2026-10-24T00:22:44.21Z"),
                 )),
+                &[],
             ),
             (
                 "claude over target, past its burst",
                 vec![("/anthropic/unified_7d/utilization", json!(0.96))],
                 Some((true, Some(PACE_ONLY_REASON), Some("2026-10-26T23:00:00Z"))),
                 free,
+                &[],
             ),
             (
                 "claude's five hours used up",
                 vec![("/anthropic/unified_5h/utilization", json!(1.0))],
                 Some((true, Some("window"), Some("2026-10-23T17:00:00Z"))),
                 free,
+                &[],
             ),
             (
                 "openai over pace, five hours used up before it catches up",
                 codex_spent(1200),
                 free,
                 Some((true, Some("window"), Some("2026-10-24T00:22:44.21Z"))),
+                &[],
             ),
             (
                 "claude over target with five hours used up: the later",
@@ -1410,38 +1469,95 @@ pub(super) mod tests {
                 ],
                 Some((true, Some("window"), Some("2026-10-26T23:00:00Z"))),
                 free,
+                &[],
             ),
             (
                 "openai over pace, five hours used up past it",
                 codex_spent(36000),
                 free,
                 Some((true, Some("window"), Some("2026-10-24T01:06:40Z"))),
+                &[],
             ),
             (
                 "claude's exhausted week is not pace-only",
                 vec![("/anthropic/unified_7d/utilization", json!(1.0))],
                 Some((true, Some("pace"), Some("2026-10-26T23:00:00Z"))),
                 free,
+                &[],
             ),
             (
                 "openai over pace, exhausted five hours past reset without a new reading",
                 codex_spent(0),
                 free,
                 Some((true, Some("window"), Some("2026-10-24T00:22:44.21Z"))),
+                &[],
             ),
             (
                 "claude with five hours only, as after a restart",
                 vec![("/anthropic/unified_7d", Value::Null)],
                 unread,
                 free,
+                &[],
             ),
             (
-                "claude's week reset since its reading",
-                vec![("/anthropic/unified_7d/reset", json!(1792768000))],
+                "claude's week reset since its reading: probed",
+                vec![week()],
                 unread,
                 free,
+                &["claude"],
             ),
-            ("no codex", vec![("/codex", Value::Null)], free, unread),
+            (
+                "openai's week reset since its reading: probed",
+                vec![("/codex/primary/reset_after_seconds", json!(0))],
+                free,
+                unread,
+                &["openai"],
+            ),
+            (
+                "claude's week reset, its five hours used up",
+                vec![week(), ("/anthropic/unified_5h/utilization", json!(1.0))],
+                unread,
+                free,
+                &[],
+            ),
+            (
+                "claude's week reset, its five hours used up and reset too",
+                vec![
+                    week(),
+                    ("/anthropic/unified_5h/utilization", json!(1.0)),
+                    ("/anthropic/unified_5h/reset", json!(1792768000)),
+                ],
+                unread,
+                free,
+                &[],
+            ),
+            (
+                "claude's week reset, read 31 hours ago",
+                vec![
+                    week(),
+                    (
+                        "/anthropic/unified_7d/observed_at",
+                        json!(1792768000 - 31 * 3600),
+                    ),
+                ],
+                unread,
+                free,
+                &[],
+            ),
+            (
+                "claude's week reset, read an hour from now",
+                vec![
+                    week(),
+                    (
+                        "/anthropic/unified_7d/observed_at",
+                        json!(1792768000 + 3600),
+                    ),
+                ],
+                unread,
+                free,
+                &[],
+            ),
+            ("no codex", vec![("/codex", Value::Null)], free, unread, &[]),
             (
                 "claude's week read 31 hours ago",
                 vec![(
@@ -1450,16 +1566,28 @@ pub(super) mod tests {
                 )],
                 unread,
                 free,
+                &[],
             ),
             (
                 "openai's week read an hour from now",
                 vec![("/codex/primary/observed_at", json!(1792768000 + 3600))],
                 free,
                 unread,
+                &[],
             ),
         ];
-        for (name, edits, claude, openai) in cases {
+        // The recorded answer counts no requests; with some counted, a
+        // restart's probe is spent, and a reset's is not.
+        let counted = json!({"requests": 3, "unmetered": 0});
+        for ((name, edits, claude, openai, probed), counts) in (cases.into_iter())
+            .flat_map(|case| [(case.clone(), None), (case, Some(counted.clone()))])
+        {
             let mut broker = broker();
+            if let Some(counts) = &counts {
+                for provider in ["anthropic", "codex"] {
+                    broker[provider]["counts"] = counts.clone();
+                }
+            }
             for (pointer, value) in edits {
                 *broker.pointer_mut(pointer).unwrap() = value;
             }
@@ -1475,6 +1603,17 @@ pub(super) mod tests {
                 e.is_object().then_some(hold)
             };
             assert_eq!((got("claude"), got("openai")), (claude, openai), "{name}");
+            let marked: Vec<&str> = (snap["pools"].as_object().unwrap().iter())
+                .filter(|(_, e)| e.get(WINDOW_RESET_AT).is_some())
+                .map(|(pool, _)| pool.as_str())
+                .collect();
+            assert_eq!(marked, probed, "{name}: {counts:?}");
+            let probes = unasked(&broker, &snap);
+            assert_eq!(
+                probes.keys().collect::<Vec<_>>(),
+                probed,
+                "{name}: {counts:?}"
+            );
             for settings in [
                 json!({}),
                 json!({"speed": 5}),
