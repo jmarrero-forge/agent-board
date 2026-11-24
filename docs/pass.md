@@ -1570,14 +1570,19 @@ in an activated config without used-reset accounting: this slice would count it
 as capacity until expiry. It never presses a provider reset automatically.
 
 The broker learns a pool's windows only from the responses to requests made
-through it, so after a restart a held pool would never get a reading. With
+through it, so after a restart a held pool would never get a reading, nor
+would one whose paced window has reset since its last reading. With
 `usage.probe`, a pool with no reading whose count of requests in the broker's
 answer (`anthropic.counts`, `codex.counts`, as `mistral.counts`) is zero, and
 with no run in flight named for it, takes one run in stage 4, within
 `--max-dispatch`: `probe: claude has no reading; one run to take one` before
-its start. Its requests give the next pass a reading. A pool with requests and
-still no reading, or without a count, stays held, and the published snapshot
-holds it either way (`no-reading`).
+its start. Its requests give the next pass a reading. A pool whose last
+reading was current but of a window that has reset since takes that run too,
+whatever the count, unless a shorter window was used up; its entry says when
+that window reset (`window_reset_at`), and its usage line is
+`claude: no reading since its window reset at T (held)`. A pool with requests
+and still no reading otherwise, or without a count, stays held, and the
+published snapshot holds it either way (`no-reading`).
 
 With `holds` set (off unless set; agent-board#307), the pass also publishes
 the holds of stages 3 and 4, so that the control app renders the pass's

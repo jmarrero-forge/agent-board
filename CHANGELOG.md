@@ -11,6 +11,13 @@ lists what v1.0 waits on and what a caller may rely on.
 The first release will be v1.0.0, once every gate in docs/release.md is met.
 Since the workspace started at 0.1.0 it has gained:
 
+- With `usage.probe`, a pool whose last reading was current but of a paced
+  window that has reset since takes the one probe run, as after a broker
+  restart, unless a shorter window was used up. It had stayed held
+  (`no-reading`) until the broker restarted, since nothing in flight would
+  ask the broker again; its snapshot entry now carries `window_reset_at`
+  (jmarrero-forge/tracker#107).
+
 - The static binaries (`just build-static`, the CI and release build) are
   pinned to baseline x86-64 for the C that ring and SQLite compile and for
   Rust, and the build job checks it. They had been built with whatever the

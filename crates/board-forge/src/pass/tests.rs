@@ -2566,6 +2566,23 @@ fn restarted(replay: &mut Replay, settings: &mut Value, probe: bool, requests: O
     settings["usage"]["probe"] = probe.into();
 }
 
+/// The broker some requests after its restart, `with_broker`'s with
+/// `probe` set, whose last reading of each pool's week was before that week
+/// reset; with `edits` (JSON pointer, value).
+fn week_reset(replay: &mut Replay, settings: &mut Value, edits: &[(&str, Value)]) {
+    let mut broker = usage::tests::broker();
+    broker["anthropic"]["unified_7d"]["reset"] = 1792768000.into();
+    broker["codex"]["primary"]["reset_after_seconds"] = 0.into();
+    for provider in ["anthropic", "codex"] {
+        broker[provider]["counts"] = json!({"requests": 3, "unmetered": 0});
+    }
+    for (pointer, value) in edits {
+        *broker.pointer_mut(pointer).unwrap() = value.clone();
+    }
+    with_broker(replay, settings, json!({"body": broker}));
+    settings["usage"]["probe"] = true.into();
+}
+
 /// The recorded run in flight on claude, its pool unnamed.
 fn unpooled(replay: &mut Replay) {
     let runs = &mut answer(replay, "status=in_progress")["body"]["workflow_runs"];
@@ -5147,6 +5164,55 @@ fn replay_scenarios() {
                 unpooled(r);
             }),
             vec!["hold pools: claude has no reading; openai has no reading; new runs wait"],
+            0,
+            0,
+        ),
+        (
+            "probe: one run on each pool whose week reset since its reading, requests or not",
+            Box::new(|r, c| {
+                week_reset(r, c, &[]);
+                unpooled(r);
+            }),
+            vec![
+                "usage: claude: no reading since its window reset at 2026-10-23T15:06:40Z (held); openai: no reading since its window reset at 2026-10-23T15:06:40Z (held)",
+                "probe: claude has no reading; one run to take one",
+                "start triage cgwalters-forge/tracker#446 pool=claude",
+                "probe: openai has no reading; one run to take one",
+                "start triage cgwalters-forge/tracker#459 pool=openai",
+                "hold pools: claude has no reading; openai has no reading; 277 more candidate(s) wait",
+            ],
+            2,
+            0,
+        ),
+        (
+            "probe: none on a pool whose week reset with a run in flight",
+            Box::new(|r, c| week_reset(r, c, &[])),
+            vec![
+                "probe: openai has no reading; one run to take one",
+                "start triage cgwalters-forge/tracker#446 pool=openai",
+            ],
+            1,
+            0,
+        ),
+        (
+            "probe: a week reset with a shorter window used up holds",
+            Box::new(|r, c| {
+                let spent = json!({"used_percent": 100, "window_minutes": 300,
+                    "reset_after_seconds": 1200, "observed_at": 1792768000});
+                week_reset(
+                    r,
+                    c,
+                    &[
+                        ("/anthropic/unified_5h/utilization", json!(1.0)),
+                        ("/codex/secondary", spent),
+                    ],
+                );
+                unpooled(r);
+            }),
+            vec![
+                "usage: claude: no reading (held); openai: no reading (held)",
+                "hold pools: claude has no reading; openai has no reading; new runs wait",
+            ],
             0,
             0,
         ),
